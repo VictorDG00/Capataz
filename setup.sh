@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+
 echo "🏗️  [CAPATAZ] Iniciando a fundação e decolagem..."
 
 # 1. Criar ambiente virtual se não existir
@@ -21,13 +23,33 @@ else
     exit 1
 fi
 
-# 4. Garantir arquivo .env
-if [ ! -f ".env" ]; then
-    echo "DEEPSEEK_API_KEY=seu_token_aqui" > .env
-    echo "DEEPSEEK_BASE_URL=https://api.deepseek.com" >> .env
-    echo "DATABASE_URL=sqlite:///./src/core/checkpoints.db" >> .env
-    echo "⚠️  Arquivo .env criado. PREENCHA AS CHAVES antes de rodar novamente."
-    exit 1
+# 4. Garantir arquivo .env sem sobrescrever segredos existentes
+if [ -f ".env" ]; then
+    echo "✅ .env já existe. Nenhuma alteração foi feita nas variáveis atuais."
+else
+    if [ -f ".env.exemple" ]; then
+        cp .env.exemple .env
+        echo "⚠️  .env criado a partir de .env.exemple. Revise e preencha suas chaves de API antes de rodar."
+    else
+        cat > .env <<'EOF'
+# --- API KEYS ---
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+DEEPSEEK_API_KEY=
+OPENAI_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+
+# --- DATABASE CONFIG ---
+DATABASE_URL=sqlite:///./src/core/checkpoints.db
+
+# --- ROLES PROVIDERS ---
+AGENT_PROVIDER_ARCHITECT=deepseek
+AGENT_PROVIDER_DEVELOPER=deepseek
+AGENT_PROVIDER_DESIGNER=deepseek
+AGENT_PROVIDER_SECURITY_AUDITOR=deepseek
+EOF
+        echo "⚠️  .env criado com valores padrão. Preencha suas chaves de API antes de rodar."
+    fi
 fi
 
 # 5. Executar a Interface de Configuração

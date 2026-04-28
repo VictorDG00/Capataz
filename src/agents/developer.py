@@ -14,19 +14,50 @@ class DeveloperAgent:
             with open(role_path, "r") as f:
                 self.role_instruction = f.read()
         else:
-            self.role_instruction = "# CARGO: DEVELOPER\nAtue como um engenheiro de software."
+            self.role_instruction = "# CARGO: DEVELOPER\nAtue como um engenheiro de software focado em segurança e testes."
 
-    def execute_plan(self, plan: str, actlog: str):
+    def execute_sprint(self, sprint_text: str, feedback: str = None):
         """
-        Executa as tarefas técnicas baseadas no plano do Arquiteto.
+        Executa as tarefas técnicas baseadas em um item de Sprint extraído do ciclo.
+        Garante que as regras de sprint.md sejam cumpridas.
+        Se feedback for fornecido, tenta corrigir o erro relatado.
         """
+        sprints_rules = ""
+        if os.path.exists("sprints.md"):
+            with open("sprints.md", "r") as f:
+                sprints_rules = f.read()
+
+        prompt_text = f"""
+            Você recebeu uma nova Sprint para executar.
+
+            REGRAS OBRIGATÓRIAS DE ENTREGA (de sprints.md):
+            {sprints_rules}
+
+            DADOS DA SPRINT ATUAL:
+            {sprint_text}
+            """
+
+        if feedback:
+            prompt_text += f"""
+            ATENÇÃO: A tentativa anterior falhou na validação.
+            MENSAGEM DE ERRO / FEEDBACK DA VALIDAÇÃO:
+            {feedback}
+
+            Por favor, corrija o código para resolver este erro.
+            """
+
+        prompt_text += """
+            Com base no objetivo da sprint, regra de validação e módulos afetados, escreva/atualize o código necessário.
+            Sua resposta deve conter os artefatos de código, testes (mockados) e documentação in-code (Docstrings/JSDoc) exigidos.
+            Explique brevemente as modificações que fez para cumprir as regras.
+        """
+
         prompt = [
             SystemMessage(content=self.role_instruction),
-            HumanMessage(content=f"PLANO DE EXECUÇÃO:\n{plan}\n\nHISTÓRICO (ACTLOG):\n{actlog}\n\nEscreva o código necessário.")
+            HumanMessage(content=prompt_text)
         ]
         
         response = self.llm.invoke(prompt)
         return response.content
 
-# Instância pronta para uso no graph.py
 developer_agent = DeveloperAgent()

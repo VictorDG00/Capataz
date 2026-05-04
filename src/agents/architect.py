@@ -2,19 +2,20 @@
 import os
 import glob
 from langchain_anthropic import ChatAnthropic
-from langchain.schema import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from src.core.config import settings
+
+CONTRACT_DELIMITER = "---CONTRACT---"
+
 
 class ArchitectAgent:
     def __init__(self):
-        # Inicializa o Claude 3.5 Sonnet
         self.llm = ChatAnthropic(
             model="claude-3-5-sonnet-20240620",
             anthropic_api_key=settings.anthropic_api_key.get_secret_value(),
-            temperature=0.1 # Quase zero para máxima consistência arquitetural
+            temperature=0.1,
         )
-        
-        # Carrega as regras do cargo (Tech Lead)
+
         role_path = ".capataz/roles/tech_lead.md"
         if os.path.exists(role_path):
             with open(role_path, "r") as f:
@@ -22,8 +23,8 @@ class ArchitectAgent:
         else:
             self.role_instruction = "Você é o arquiteto responsável por traçar o plano de execução do projeto."
 
-    def _get_next_cycle_number(self):
-        """Retorna o próximo número de ciclo formatado (ex: '01')."""
+    def _get_next_cycle_number(self) -> str:
+        """Retorna o próximo número de ciclo formatado (ex: '04')."""
         files = glob.glob(".capataz/ciclos/Ciclo*.md")
         if not files:
             return "01"
@@ -41,9 +42,24 @@ class ArchitectAgent:
 
         return f"{max_num + 1:02d}"
 
-    def plan_cycle(self, task: str):
+    def _split_response(self, content: str) -> tuple[str, str]:
         """
-        Lê projeto.md e sprints.md para gerar o arquivo CicloNN.md contendo o checklist de Sprints.
+        Divide o output do LLM em (ciclo_md, contract_md) usando o delimitador fixo.
+        Se o delimitador não estiver presente, retorna o conteúdo completo como ciclo
+        e um contrato vazio para não quebrar o fluxo.
+        """
+        if CONTRACT_DELIMITER in content:
+            parts = content.split(CONTRACT_DELIMITER, 1)
+            return parts[0].strip(), parts[1].strip()
+        return content.strip(), ""
+
+    def plan_cycle(self, task: str) -> tuple[str, str]:
+        """
+        Lê projeto.md e sprints.md e gera em uma única chamada LLM:
+        - CicloNN.md: plano de sprints
+        - CicloNN_contract.md: contrato de API (endpoints, tipos, env vars)
+
+        Retorna (cycle_filename, contract_filename).
         """
         projeto_content = ""
         if os.path.exists("projeto.md"):
@@ -58,43 +74,68 @@ class ArchitectAgent:
         prompt = [
             SystemMessage(content=self.role_instruction),
             HumanMessage(content=f"""
-                Você é o arquiteto responsável por traçar o plano de execução do projeto. Sua tarefa é criar um novo ciclo.
-                
-                DEMANDA ATUAL: {task}
-                
-                Fontes de Verdade:
-                1. projeto.md:
-                {projeto_content}
+Você é o arquiteto responsável por traçar o plano de execução do projeto.
+Sua tarefa é criar um novo ciclo E o contrato de API correspondente.
 
-                2. sprints.md:
-                {sprints_content}
+DEMANDA ATUAL: {task}
 
-                Como Estruturar a sua resposta (ela será salva como o arquivo markdown do ciclo):
-                - Crie um cabeçalho com o objetivo geral deste Ciclo.
-                - Liste todas as Sprints necessárias para alcançar o objetivo. Não há limite de sprints, mas elas devem ser curtas e focadas.
-                - Para cada Sprint, defina **exatamente** no formato de checklist (use "[ ] " literal):
-                  - [ ] **Sprint X: [Nome da Sprint]**
-                  - **Objetivo:** [O que será construído]
-                  - **Regra de Validação:** [Como os testes atuarão aqui]
-                  - **Módulos Afetados:** [Quais áreas do monolito serão tocadas]
+Fontes de Verdade:
+1. projeto.md:
+{projeto_content}
 
-                Atenção: O plano deve seguir uma ordem cronológica lógica, garantindo que nenhuma sprint quebre o desacoplamento do sistema.
-                Responda APENAS com o conteúdo Markdown final que será salvo no arquivo, sem introduções ou explicações fora do Markdown.
-            """)
+2. sprints.md:
+{sprints_content}
+
+INSTRUÇÕES DE RESPOSTA:
+Sua resposta deve conter DUAS seções separadas pelo delimitador exato `{CONTRACT_DELIMITER}`.
+
+SEÇÃO 1 — Plano do Ciclo (antes do delimitador):
+- Cabeçalho com objetivo geral do ciclo.
+- Lista de Sprints em formato checklist (`- [ ] **Sprint X: ...**`).
+- Para cada Sprint: Objetivo, Módulos Afetados, Regra de Validação.
+- Ordem cronológica lógica, sem dependências cruzadas não declaradas.
+
+{CONTRACT_DELIMITER}
+
+SEÇÃO 2 — Contrato de API (após o delimitador, MÁXIMO 60 linhas):
+Use exatamente esta estrutura:
+
+## Endpoints
+| Método | Rota | Request Body | Response |
+|--------|------|--------------|----------|
+| ...    | ...  | ...          | ...      |
+
+## Tipos Compartilhados
+```typescript
+// interfaces TypeScript ou dataclasses Python compartilhadas entre front e back
+```
+
+## Variáveis de Ambiente
+| Variável | Usado em | Descrição |
+|----------|----------|-----------|
+| ...      | ...      | ...       |
+
+Responda APENAS com o conteúdo das duas seções. Sem introduções ou explicações externas.
+"""),
         ]
-        
+
         response = self.llm.invoke(prompt)
+        cycle_content, contract_content = self._split_response(response.content)
 
         cycle_num = self._get_next_cycle_number()
-        cycle_filename = f".capataz/ciclos/Ciclo{cycle_num}.md"
-
-        # Garante que o diretório existe
         os.makedirs(".capataz/ciclos", exist_ok=True)
 
+        cycle_filename = f".capataz/ciclos/Ciclo{cycle_num}.md"
         with open(cycle_filename, "w") as f:
-            f.write(response.content)
+            f.write(cycle_content)
 
-        print(f"🏛️ [CAPATAZ] Ciclo gerado com sucesso: {cycle_filename}")
-        return cycle_filename
+        contract_filename = f".capataz/ciclos/Ciclo{cycle_num}_contract.md"
+        with open(contract_filename, "w") as f:
+            f.write(contract_content)
+
+        print(f"🏛️ [CAPATAZ] Ciclo gerado: {cycle_filename}")
+        print(f"📋 [CAPATAZ] Contrato gerado: {contract_filename}")
+        return cycle_filename, contract_filename
+
 
 architect_agent = ArchitectAgent()

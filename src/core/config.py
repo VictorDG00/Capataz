@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     agent_provider_developer: str = Field(default="deepseek", validation_alias="AGENT_PROVIDER_DEVELOPER")
     agent_provider_designer: str = Field(default="deepseek", validation_alias="AGENT_PROVIDER_DESIGNER")
     agent_provider_security_auditor: str = Field(default="deepseek", validation_alias="AGENT_PROVIDER_SECURITY_AUDITOR")
+    agent_provider_integrator: str = Field(default="deepseek", validation_alias="AGENT_PROVIDER_INTEGRATOR")
 
     # Chaves de API
     deepseek_api_key: Optional[SecretStr] = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
             "developer": self.agent_provider_developer,
             "designer": self.agent_provider_designer,
             "security_auditor": self.agent_provider_security_auditor,
+            "integrator": self.agent_provider_integrator,
         }
         return mapping.get(role, "deepseek")
 

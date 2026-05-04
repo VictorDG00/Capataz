@@ -1,34 +1,39 @@
+# src/agents/graph.py
 import re
-import operator
-from typing import Annotated, List, TypedDict, Union, Optional
+from typing import Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 
-# Importamos nossos agentes e segurança
 from src.agents.architect import architect_agent
-from src.agents.developer import developer_agent 
+from src.agents.developer import developer_agent
+from src.agents.integrator import integrator_agent
 from src.core.security import security_manager
 
-# 1. Definição do Estado
+MAX_INTEGRATION_FAILURES = 2  # FAILs consecutivos antes de escalar para o Arquiteto
+
+
+# 1. Estado do grafo
+
 class AgentState(TypedDict):
-    task: str                   # A demanda principal
-    cycle_file: str             # O caminho do arquivo CicloNN.md gerado pelo Architect
-    current_sprint: str         # O conteúdo da sprint atual sendo trabalhada
-    status: str                 # 'success', 'error', 'pending'
-    latest_output: str          # Último código ou resposta gerada
-    turn_count: int             # Contador
+    task: str
+    cycle_file: str
+    contract_path: str          # Caminho do CicloNN_contract.md gerado pelo Arquiteto
+    current_sprint: str
+    status: str                 # 'pending' | 'success' | 'error' | 'contract_violation'
+    latest_output: str
+    turn_count: int
+    integration_failures: int   # Contador de FAILs consecutivos do Integrator
+
+
+# 2. Helpers de ciclo
 
 def parse_next_sprint(cycle_path: str) -> Optional[str]:
     """Lê o CicloNN.md e extrai a próxima sprint pendente [ ]."""
     try:
         with open(cycle_path, "r") as f:
             content = f.read()
-
-        # Procura por linhas começando com "- [ ] Sprint" ou similar
-        # e pega o bloco até a próxima sprint ou fim do arquivo
         sprints = re.split(r'(?=\n\s*-\s*\[\s*[ xX]\s*\].+)', content)
-
         for block in sprints:
             if re.search(r'-\s*\[\s*\]', block):
                 return block.strip()
@@ -36,123 +41,165 @@ def parse_next_sprint(cycle_path: str) -> Optional[str]:
         print(f"Erro ao ler arquivo de ciclo: {e}")
     return None
 
+
 def mark_sprint_done(cycle_path: str, sprint_text: str):
-    """Atualiza o arquivo de ciclo marcando a sprint atual como [x]."""
+    """Marca a sprint atual como [x] no arquivo de ciclo."""
     try:
         with open(cycle_path, "r") as f:
             content = f.read()
-
-        # Extrai a primeira linha da sprint (ex: "- [ ] Sprint 1: ...")
         first_line = sprint_text.split('\n')[0].strip()
-        # Vamos fazer um replace simples no arquivo
-        new_line = first_line.replace("[ ]", "[x]")
-
-        new_content = content.replace(first_line, new_line)
-
+        new_content = content.replace(first_line, first_line.replace("[ ]", "[x]"))
         with open(cycle_path, "w") as f:
             f.write(new_content)
     except Exception as e:
         print(f"Erro ao atualizar arquivo de ciclo: {e}")
 
-# 2. Funções dos Nós (Nodes)
-def node_architect(state: AgentState):
-    print("🏛️ [CAPATAZ] Tech Lead analisando o projeto e gerando novo Ciclo...")
-    # O Claude lê projeto.md e sprints.md e gera o CicloNN.md
-    cycle_file = architect_agent.plan_cycle(state["task"])
 
-    # Extrai a primeira sprint pendente
+# 3. Nós do grafo
+
+def node_architect(state: AgentState) -> dict:
+    print("🏛️ [CAPATAZ] Tech Lead analisando o projeto e gerando novo Ciclo...")
+    cycle_file, contract_path = architect_agent.plan_cycle(state["task"])
+
     next_sprint = parse_next_sprint(cycle_file)
     if not next_sprint:
         print("⚠️ Nenhuma sprint pendente encontrada no ciclo.")
-        return {"status": "error", "cycle_file": cycle_file}
+        return {"status": "error", "cycle_file": cycle_file, "contract_path": contract_path}
 
     return {
         "cycle_file": cycle_file,
+        "contract_path": contract_path,
         "current_sprint": next_sprint,
         "turn_count": state.get("turn_count", 0) + 1,
-        "status": "pending"
+        "integration_failures": 0,
+        "status": "pending",
     }
 
-def node_developer(state: AgentState):
+
+def node_developer(state: AgentState) -> dict:
     print("🏗️ [CAPATAZ] Developer executando a Sprint atual...")
 
-    # Se viemos de um erro, passamos o feedback para correção
-    feedback = state["latest_output"] if state.get("status") == "error" else None
+    feedback = state["latest_output"] if state.get("status") in ("error", "contract_violation") else None
 
-    # O Gemini recebe a sprint atual e escreve o código
-    res = developer_agent.execute_sprint(state["current_sprint"], feedback=feedback)
+    res = developer_agent.execute_sprint(
+        sprint_text=state["current_sprint"],
+        contract_path=state.get("contract_path"),
+        feedback=feedback,
+    )
     return {
         "latest_output": res,
         "turn_count": state.get("turn_count", 0) + 1,
-        "status": "pending" # Reseta o status para pending após execução
+        "status": "pending",
     }
 
-def node_validator(state: AgentState):
+
+def node_integrator(state: AgentState) -> dict:
+    print("🔍 [CAPATAZ] Integrator validando consistência com o contrato...")
+    contract_path = state.get("contract_path", "")
+    result = integrator_agent.validate(contract_path, state["latest_output"])
+
+    if result == "PASS":
+        print("✅ [INTEGRATOR] Contrato respeitado.")
+        return {"status": "pending", "integration_failures": 0}
+
+    failures = state.get("integration_failures", 0) + 1
+    print(f"❌ [INTEGRATOR] Violação ({failures}/{MAX_INTEGRATION_FAILURES}): {result}")
+
+    if failures >= MAX_INTEGRATION_FAILURES:
+        print("🔁 [INTEGRATOR] Limite de violações atingido — escalando para o Arquiteto.")
+        return {
+            "status": "error",
+            "latest_output": f"[INTEGRATOR ESCALA PARA ARQUITETO]\n{result}",
+            "integration_failures": failures,
+        }
+
+    return {
+        "status": "contract_violation",
+        "latest_output": result,
+        "integration_failures": failures,
+    }
+
+
+def node_validator(state: AgentState) -> dict:
     print("🛡️ [CAPATAZ] Validando segurança e testes da Sprint...")
-    # Roda Bandit/Ruff via SecurityManager
     scan_result = security_manager.run_security_scan()
-    
+
     if scan_result["status"] == "failed":
         print("❌ [CAPATAZ] Falha na validação de segurança/testes.")
-        # Retorna o erro para que o developer possa tentar consertar
         return {"status": "error", "latest_output": scan_result["stderr"]}
 
     print("✅ [CAPATAZ] Sprint validada com sucesso! Marcando como concluída.")
     mark_sprint_done(state["cycle_file"], state["current_sprint"])
 
-    # Prepara a próxima sprint se houver
     next_sprint = parse_next_sprint(state["cycle_file"])
-
     if next_sprint:
-         return {"status": "success", "current_sprint": next_sprint}
-    else:
-         print("🎉 [CAPATAZ] Todas as sprints deste ciclo foram concluídas!")
-         return {"status": "success", "current_sprint": ""}
+        return {"status": "success", "current_sprint": next_sprint, "integration_failures": 0}
 
-# 3. Lógica de Roteamento (As "Arestas" condicionais)
-def should_continue(state: AgentState):
+    print("🎉 [CAPATAZ] Todas as sprints deste ciclo foram concluídas!")
+    return {"status": "success", "current_sprint": ""}
+
+
+# 4. Roteamento
+
+def route_after_integrator(state: AgentState) -> str:
+    """PASS → validator | violação → developer | escala → architect."""
+    if state["status"] == "pending":
+        return "validator"
+    if state["status"] == "contract_violation":
+        return "developer"
+    # status == "error" com integration_failures >= MAX → Arquiteto revisa
+    return "architect"
+
+
+def route_after_validator(state: AgentState) -> str:
     if state.get("turn_count", 0) >= 15:
-        print("⚠️ [CAPATAZ] Limite de tentativas (turn count) excedido. Interrompendo para evitar loop infinito.")
+        print("⚠️ [CAPATAZ] Limite de turn_count atingido.")
         return END
 
     if state["status"] == "error":
-        # Se houve erro na validação, volta pro developer tentar arrumar o código
         return "developer"
 
     if state["status"] == "success" and state.get("current_sprint"):
-        # Se validou com sucesso e tem mais sprint, continua no developer
         return "developer"
 
-    # Se validou e não tem mais sprint, acaba
     return END
 
-# 4. Construção do Grafo
+
+# 5. Construção do grafo
+
 def create_graph():
-    # Setup da Persistência (Checkpoint)
-    memory = SqliteSaver.from_conn_string(":memory:")
-    
+    memory = MemorySaver()
     workflow = StateGraph(AgentState)
 
-    # Adiciona os nós
     workflow.add_node("architect", node_architect)
     workflow.add_node("developer", node_developer)
+    workflow.add_node("integrator", node_integrator)
     workflow.add_node("validator", node_validator)
 
-    # Define o fluxo
     workflow.set_entry_point("architect")
     workflow.add_edge("architect", "developer")
-    workflow.add_edge("developer", "validator")
-    
-    # Define a decisão de loop
+    workflow.add_edge("developer", "integrator")
+
+    workflow.add_conditional_edges(
+        "integrator",
+        route_after_integrator,
+        {
+            "validator": "validator",
+            "developer": "developer",
+            "architect": "architect",
+        },
+    )
+
     workflow.add_conditional_edges(
         "validator",
-        should_continue,
+        route_after_validator,
         {
             "developer": "developer",
-            "end": END
-        }
+            END: END,
+        },
     )
 
     return workflow.compile(checkpointer=memory)
+
 
 capataz_engine = create_graph()

@@ -8,9 +8,10 @@ from langgraph.graph import StateGraph, END
 from src.agents.architect import ArchitectAgent
 from src.agents.developer import DeveloperAgent
 from src.agents.integrator import IntegratorAgent, integrator_agent
-from src.core.metrics import MetricsCollector
 from src.core.config import settings
+from src.core.event_bus import EventBus
 from src.core.git import git_ops
+from src.core.metrics import MetricsCollector
 from src.core.runner import test_runner
 from src.core.security import security_manager
 from src.core.state import get_checkpointer
@@ -122,7 +123,11 @@ def node_integrator(state: AgentState, collector: Optional[MetricsCollector] = N
 
 # 5. Construção do grafo com injeção de collector
 
-def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optional[str] = None):
+def create_graph(
+    collector: Optional[MetricsCollector] = None,
+    state_path: Optional[str] = None,
+    event_bus: Optional[EventBus] = None,
+):
     """
     Constrói e compila o grafo de agentes do Capataz.
 
@@ -132,12 +137,16 @@ def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optio
                    métricas sem afetar o comportamento do grafo.
         state_path: Caminho do arquivo SQLite de checkpoint. None usa MemorySaver
                     (útil em testes). Qualquer string usa SqliteSaver em disco.
+        event_bus: EventBus opcional. Quando fornecido, publica eventos de status
+                   em tempo real no Redis para a UI web consumir via SSE.
     """
     architect = ArchitectAgent(collector=collector)
     developer = DeveloperAgent(collector=collector)
 
     def _node_architect(state: AgentState) -> dict:
         print("🏛️ [CAPATAZ] Tech Lead analisando o projeto e gerando novo Ciclo...")
+        if event_bus:
+            event_bus.publish("node_start", node="architect", message="Tech Lead planejando o ciclo...")
         cycle_file, contract_path = architect.plan_cycle(state["task"])
 
         next_sprint = parse_next_sprint(cycle_file)
@@ -145,6 +154,8 @@ def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optio
             print("⚠️ Nenhuma sprint pendente encontrada no ciclo.")
             return {"status": "error", "cycle_file": cycle_file, "contract_path": contract_path}
 
+        if event_bus:
+            event_bus.publish("node_end", node="architect", message="Ciclo e contrato gerados.")
         return {
             "cycle_file": cycle_file,
             "contract_path": contract_path,
@@ -156,6 +167,10 @@ def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optio
 
     def _node_developer(state: AgentState) -> dict:
         print("🏗️ [CAPATAZ] Developer executando a Sprint atual...")
+        sprint_name = state.get("current_sprint", "").split("\n")[0][:80]
+        if event_bus:
+            event_bus.publish("node_start", node="developer", sprint_name=sprint_name,
+                              message=f"Developer implementando: {sprint_name}")
         feedback = state["latest_output"] if state.get("status") in ("error", "contract_violation") else None
 
         if collector and state.get("status") in ("error", "contract_violation"):
@@ -171,6 +186,9 @@ def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optio
         if written:
             print(f"📁 [DEVELOPER] {len(written)} arquivo(s) gravado(s): {written}")
 
+        if event_bus:
+            event_bus.publish("node_end", node="developer", sprint_name=sprint_name,
+                              message=f"{len(written)} arquivo(s) gravado(s)")
         return {
             "latest_output": res,
             "files_written": written,
@@ -179,10 +197,18 @@ def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optio
         }
 
     def _node_integrator(state: AgentState) -> dict:
-        return node_integrator(state, collector=collector)
+        if event_bus:
+            event_bus.publish("node_start", node="integrator", message="Integrator validando contrato...")
+        result = node_integrator(state, collector=collector)
+        status_msg = "Contrato válido ✅" if result.get("status") == "pending" else f"Violação detectada ❌"
+        if event_bus:
+            event_bus.publish("node_end", node="integrator", message=status_msg)
+        return result
 
     def _node_validator(state: AgentState) -> dict:
         print("🛡️ [CAPATAZ] Validando testes e segurança da Sprint...")
+        if event_bus:
+            event_bus.publish("node_start", node="validator", message="Executando testes e SAST...")
 
         # 1. Executa testes (pytest ou jest) se houver arquivos gravados
         if state.get("files_written"):
@@ -217,11 +243,18 @@ def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optio
         print("✅ [CAPATAZ] Sprint validada com sucesso! Marcando como concluída.")
         mark_sprint_done(state["cycle_file"], state["current_sprint"])
 
+        if event_bus:
+            sprint_name = state.get("current_sprint", "").split("\n")[0][:80]
+            event_bus.publish("sprint_done", node="validator", sprint_name=sprint_name,
+                              message=f"Sprint concluída ✅")
+
         next_sprint = parse_next_sprint(state["cycle_file"])
         if next_sprint:
             return {"status": "success", "current_sprint": next_sprint, "integration_failures": 0, "files_written": []}
 
         print("🎉 [CAPATAZ] Todas as sprints deste ciclo foram concluídas!")
+        if event_bus:
+            event_bus.publish("cycle_done", node="validator", message="🎉 Ciclo concluído com sucesso!")
         return {"status": "success", "current_sprint": "", "files_written": []}
 
     # node_git só é adicionado se GITHUB_TOKEN estiver configurado

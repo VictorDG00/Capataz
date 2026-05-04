@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Capataz — Forja de Software</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3e;
+      --accent: #6c63ff;
+      --accent-dim: #3d3a6b;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --font: 'Segoe UI', system-ui, sans-serif;
+      --mono: 'Cascadia Code', 'Fira Code', monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    header span { color: var(--accent); }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    #status-badge {
+      margin-left: auto;
+      display: none;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      grid-template-rows: 1fr auto;
+      gap: 0;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* ── Painel esquerdo: configuração ── */
+    .config-panel {
+      border-right: 1px solid var(--border);
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
+
+    input, select, textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: var(--font);
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    textarea { resize: vertical; min-height: 56px; font-family: var(--mono); font-size: 12px; }
+
+    .field { margin-bottom: 12px; }
+    .field:last-child { margin-bottom: 0; }
+
+    .agents-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      font-family: var(--font);
+      font-weight: 600;
+      font-size: 13px;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #btn-start {
+      width: 100%;
+      padding: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px;
+    }
+    #btn-start:not(:disabled):hover { opacity: 0.85; }
+
+    /* ── Painel direito: timeline ── */
+    .right-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .timeline-header {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .timeline-header h2 { font-size: 14px; font-weight: 600; }
+    #cost-badge {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--yellow);
+      font-family: var(--mono);
+    }
+
+    #timeline {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .timeline-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+    .node-icon { font-size: 18px; flex-shrink: 0; line-height: 1.4; }
+    .item-body { flex: 1; min-width: 0; }
+    .item-node { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .item-msg { color: var(--text); margin-top: 2px; }
+    .item-meta { color: var(--muted); font-size: 11px; margin-top: 4px; font-family: var(--mono); }
+    .item-time { color: var(--muted); font-size: 11px; flex-shrink: 0; font-family: var(--mono); }
+
+    .item-node.architect { color: #a78bfa; }
+    .item-node.developer { color: #60a5fa; }
+    .item-node.integrator { color: #34d399; }
+    .item-node.validator  { color: var(--yellow); }
+    .item-node.git        { color: #f472b6; }
+    .item-node.system     { color: var(--muted); }
+
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Painel inferior: teste ── */
+    .test-panel {
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .test-header {
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .test-header h3 { font-size: 13px; font-weight: 600; }
+
+    #btn-test {
+      padding: 6px 16px;
+      background: var(--green);
+      color: #000;
+      font-size: 12px;
+    }
+    #btn-test:not(:disabled):hover { opacity: 0.85; }
+
+    #btn-stop-test {
+      padding: 6px 14px;
+      background: var(--red);
+      color: #fff;
+      font-size: 12px;
+      display: none;
+    }
+    #btn-stop-test:not(:disabled):hover { opacity: 0.85; }
+
+    #test-logs {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #94a3b8;
+      background: #090b11;
+      padding: 10px 20px;
+      height: 140px;
+      overflow-y: auto;
+      line-height: 1.6;
+      display: none;
+    }
+    #test-logs .log-line { white-space: pre-wrap; word-break: break-all; }
+    #test-logs .log-line.err { color: var(--red); }
+
+    #empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      gap: 8px;
+      padding: 40px;
+    }
+    #empty-state .icon { font-size: 40px; }
+    #empty-state p { font-size: 13px; text-align: center; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span>🏗️</span>
+  <h1>Capataz <span>Forja</span></h1>
+  <div class="badge" id="status-badge">Rodando</div>
+</header>
+
+<div class="layout">
+
+  <!-- Configuração -->
+  <aside class="config-panel">
+
+    <div>
+      <div class="section-title">Projeto</div>
+      <div class="field"><label>Nome</label><input id="proj-name" type="text" placeholder="Meu App" /></div>
+      <div class="field"><label>Tarefa / Demanda</label>
+        <textarea id="task" placeholder="Descreva o que o Capataz deve construir..." rows="3"></textarea>
+      </div>
+      <div class="field"><label>Linguagem</label>
+        <select id="proj-lang">
+          <option value="python">Python</option>
+          <option value="typescript">TypeScript</option>
+          <option value="javascript">JavaScript</option>
+        </select>
+      </div>
+      <div class="field"><label>Framework</label><input id="proj-framework" type="text" placeholder="fastapi, nextjs, express..." /></div>
+    </div>
+
+    <div>
+      <div class="section-title">Agents</div>
+      <div class="agents-grid">
+        <div class="field"><label>Arquiteto</label>
+          <select id="agent-arch">
+            <option value="claude">Claude</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="gemini">Gemini</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </div>
+        <div class="field"><label>Developer</label>
+          <select id="agent-dev">
+            <option value="deepseek">DeepSeek</option>
+            <option value="claude">Claude</option>
+            <option value="gemini">Gemini</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </div>
+        <div class="field"><label>Integrator</label>
+          <select id="agent-int">
+            <option value="deepseek">DeepSeek</option>
+            <option value="claude">Claude</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </div>
+        <div class="field"><label>Designer</label>
+          <select id="agent-des">
+            <option value="gemini">Gemini</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="claude">Claude</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">Limites</div>
+      <div class="field"><label>Máx. tokens por sessão</label>
+        <input id="limit-tokens" type="number" value="100000" min="1000" />
+      </div>
+      <div class="field"><label>Máx. retries por sprint</label>
+        <input id="limit-retries" type="number" value="3" min="1" max="10" />
+      </div>
+    </div>
+
+    <button id="btn-start" onclick="startSession()">⚡ Iniciar Forja</button>
+
+  </aside>
+
+  <!-- Timeline -->
+  <section class="right-panel">
+    <div class="timeline-header">
+      <h2>Timeline ao Vivo</h2>
+      <span id="cost-badge" style="display:none">💰 $0.0000</span>
+    </div>
+    <div id="timeline">
+      <div id="empty-state">
+        <div class="icon">⚒️</div>
+        <p>Configure o projeto e clique em<br><strong>Iniciar Forja</strong> para começar.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Teste -->
+  <footer class="test-panel">
+    <div class="test-header">
+      <h3>🚀 Teste do Projeto</h3>
+      <button id="btn-test" disabled onclick="startTest()">Testar Projeto</button>
+      <button id="btn-stop-test" onclick="stopTest()">⏹ Parar</button>
+      <span id="test-status" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <div id="test-logs"></div>
+  </footer>
+
+</div>
+
+<script>
+  /** @type {string|null} */
+  let currentSessionId = null;
+  /** @type {EventSource|null} */
+  let eventSource = null;
+  /** @type {EventSource|null} */
+  let testSource = null;
+  let totalCost = 0;
+
+  const NODE_ICONS = {
+    architect: '🏛️',
+    developer: '🏗️',
+    integrator: '🔍',
+    validator: '🛡️',
+    git: '🔀',
+    default: '⚙️',
+  };
+
+  /** Carrega configuração do .capataz.yaml e preenche o formulário. */
+  async function loadConfig() {
+    try {
+      const res = await fetch('/config');
+      if (!res.ok) return;
+      const cfg = await res.json();
+      const p = cfg.project || {};
+      const a = cfg.agents || {};
+      const l = cfg.limits || {};
+      if (p.name)        setVal('proj-name', p.name);
+      if (p.language)    setVal('proj-lang', p.language);
+      if (p.framework)   setVal('proj-framework', p.framework);
+      if (a.architect)   setVal('agent-arch', a.architect);
+      if (a.developer)   setVal('agent-dev', a.developer);
+      if (a.integrator)  setVal('agent-int', a.integrator);
+      if (a.designer)    setVal('agent-des', a.designer);
+      if (l.max_tokens_per_session) setVal('limit-tokens', l.max_tokens_per_session);
+      if (l.max_retries_per_sprint) setVal('limit-retries', l.max_retries_per_sprint);
+    } catch (_) {}
+  }
+
+  /** Inicia uma sessão do Capataz. */
+  async function startSession() {
+    const task = document.getElementById('task').value.trim();
+    if (!task) { alert('Digite a tarefa antes de iniciar.'); return; }
+
+    document.getElementById('btn-start').disabled = true;
+    document.getElementById('empty-state')?.remove();
+    document.getElementById('status-badge').style.display = 'block';
+    totalCost = 0;
+
+    try {
+      const res = await fetch('/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task }),
+      });
+      const data = await res.json();
+      currentSessionId = data.session_id;
+      appendTimelineItem({ type: 'system', message: `Sessão iniciada: ${currentSessionId}` });
+      openEventStream(currentSessionId);
+    } catch (e) {
+      appendTimelineItem({ type: 'error', message: `Erro ao iniciar: ${e.message}` });
+      document.getElementById('btn-start').disabled = false;
+    }
+  }
+
+  /** Abre o EventSource SSE para a sessão. */
+  function openEventStream(sessionId) {
+    if (eventSource) eventSource.close();
+    eventSource = new EventSource(`/session/${sessionId}/stream`);
+
+    eventSource.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data);
+        handleEvent(event);
+      } catch (_) {}
+    };
+
+    eventSource.onerror = () => {
+      appendTimelineItem({ type: 'system', message: 'Conexão SSE encerrada.' });
+      eventSource.close();
+    };
+  }
+
+  /** Processa um evento recebido via SSE. */
+  function handleEvent(event) {
+    const { type, node, message, tokens_used, cost_usd, duration_seconds, sprint_name } = event;
+
+    if (cost_usd) {
+      totalCost += cost_usd;
+      const badge = document.getElementById('cost-badge');
+      badge.style.display = 'block';
+      badge.textContent = `💰 $${totalCost.toFixed(4)}`;
+    }
+
+    if (type === 'node_start') {
+      appendTimelineItem({ type, node, message, spinning: true });
+    } else if (type === 'node_end') {
+      const meta = [
+        tokens_used ? `${tokens_used.toLocaleString()} tok` : '',
+        cost_usd ? `$${cost_usd.toFixed(4)}` : '',
+        duration_seconds ? `${duration_seconds.toFixed(1)}s` : '',
+      ].filter(Boolean).join(' · ');
+      appendTimelineItem({ type, node, message, meta });
+    } else if (type === 'sprint_done') {
+      appendTimelineItem({ type: 'sprint_done', node, message: `✅ ${sprint_name || message}` });
+    } else if (type === 'cycle_done') {
+      appendTimelineItem({ type: 'cycle_done', node, message });
+      document.getElementById('status-badge').textContent = 'Concluído';
+      document.getElementById('btn-test').disabled = false;
+      document.getElementById('btn-start').disabled = false;
+      eventSource?.close();
+    } else if (type === 'error') {
+      appendTimelineItem({ type: 'error', node, message });
+      document.getElementById('btn-start').disabled = false;
+      eventSource?.close();
+    }
+  }
+
+  /** Adiciona um item à timeline. */
+  function appendTimelineItem({ type, node, message, meta, spinning }) {
+    const timeline = document.getElementById('timeline');
+    const item = document.createElement('div');
+    item.className = 'timeline-item';
+
+    const icon = spinning
+      ? '<div class="spinner"></div>'
+      : `<div class="node-icon">${NODE_ICONS[node] || NODE_ICONS.default}</div>`;
+
+    const nodeClass = node || type || 'system';
+    const time = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    item.innerHTML = `
+      ${icon}
+      <div class="item-body">
+        <div class="item-node ${nodeClass}">${(node || type || '').toUpperCase()}</div>
+        <div class="item-msg">${escHtml(message || '')}</div>
+        ${meta ? `<div class="item-meta">${escHtml(meta)}</div>` : ''}
+      </div>
+      <div class="item-time">${time}</div>
+    `;
+
+    timeline.appendChild(item);
+    timeline.scrollTop = timeline.scrollHeight;
+  }
+
+  /** Inicia o processo de teste do projeto construído. */
+  async function startTest() {
+    if (!currentSessionId) return;
+    document.getElementById('btn-test').disabled = true;
+    document.getElementById('btn-stop-test').style.display = 'block';
+    document.getElementById('test-logs').style.display = 'block';
+    document.getElementById('test-logs').innerHTML = '';
+    document.getElementById('test-status').textContent = 'Iniciando...';
+
+    try {
+      const res = await fetch(`/session/${currentSessionId}/test`, { method: 'POST' });
+      const data = await res.json();
+      document.getElementById('test-status').textContent = data.message || '';
+      openTestStream(currentSessionId);
+    } catch (e) {
+      appendLog(`Erro: ${e.message}`, true);
+    }
+  }
+
+  /** Abre SSE para logs do processo de teste. */
+  function openTestStream(sessionId) {
+    if (testSource) testSource.close();
+    testSource = new EventSource(`/session/${sessionId}/test/stream`);
+    testSource.onmessage = (e) => appendLog(e.data);
+    testSource.onerror = () => {
+      appendLog('--- processo encerrado ---');
+      testSource.close();
+    };
+  }
+
+  /** Encerra o processo de teste. */
+  async function stopTest() {
+    if (!currentSessionId) return;
+    await fetch(`/session/${currentSessionId}/test/stop`, { method: 'POST' });
+    testSource?.close();
+    document.getElementById('btn-stop-test').style.display = 'none';
+    document.getElementById('btn-test').disabled = false;
+    document.getElementById('test-status').textContent = 'Parado.';
+  }
+
+  /** Adiciona linha ao painel de logs. */
+  function appendLog(line, isErr = false) {
+    const logs = document.getElementById('test-logs');
+    const el = document.createElement('div');
+    el.className = `log-line${isErr ? ' err' : ''}`;
+    el.textContent = line;
+    logs.appendChild(el);
+    logs.scrollTop = logs.scrollHeight;
+  }
+
+  /** Define valor de um input/select por ID. */
+  function setVal(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  }
+
+  /** Escapa HTML para evitar XSS. */
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  loadConfig();
+</script>
+
+</body>
+</html>

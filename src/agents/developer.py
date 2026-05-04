@@ -1,11 +1,13 @@
 # src/agents/developer.py
 import os
 import re
+import time
 from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from src.core.factory import LLMFactory
+from src.core.metrics import MetricsCollector
 
 MAX_LINES_PER_FILE = 200
 MAX_FILES_INJECTED = 3
@@ -40,8 +42,17 @@ def _read_bounded(path: str) -> str:
     return "".join(lines)
 
 
+def _get_model_name(llm) -> str:
+    return getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
+
+
 class DeveloperAgent:
-    def __init__(self):
+    def __init__(self, collector: Optional[MetricsCollector] = None):
+        """
+        Args:
+            collector: MetricsCollector injetado pelo grafo. None desativa métricas.
+        """
+        self.collector = collector
         self.llm = LLMFactory.get_model("developer")
 
         role_path = ".capataz/roles/developer.md"
@@ -130,7 +141,13 @@ Explique brevemente as modificações realizadas.
             HumanMessage(content=prompt_text),
         ]
 
+        start = time.perf_counter()
         response = self.llm.invoke(prompt)
+        duration = time.perf_counter() - start
+
+        if self.collector:
+            self.collector.record_call("developer", _get_model_name(self.llm), response, duration)
+
         return response.content
 
 

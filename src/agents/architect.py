@@ -1,15 +1,29 @@
 # src/agents/architect.py
 import os
 import glob
+import time
+from typing import Optional
+
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
+
 from src.core.config import settings
+from src.core.metrics import MetricsCollector
 
 CONTRACT_DELIMITER = "---CONTRACT---"
 
 
+def _get_model_name(llm) -> str:
+    return getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
+
+
 class ArchitectAgent:
-    def __init__(self):
+    def __init__(self, collector: Optional[MetricsCollector] = None):
+        """
+        Args:
+            collector: MetricsCollector injetado pelo grafo. None desativa métricas.
+        """
+        self.collector = collector
         self.llm = ChatAnthropic(
             model="claude-3-5-sonnet-20240620",
             anthropic_api_key=settings.anthropic_api_key.get_secret_value(),
@@ -119,7 +133,13 @@ Responda APENAS com o conteúdo das duas seções. Sem introduções ou explica�
 """),
         ]
 
+        start = time.perf_counter()
         response = self.llm.invoke(prompt)
+        duration = time.perf_counter() - start
+
+        if self.collector:
+            self.collector.record_call("architect", _get_model_name(self.llm), response, duration)
+
         cycle_content, contract_content = self._split_response(response.content)
 
         cycle_num = self._get_next_cycle_number()

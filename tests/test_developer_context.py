@@ -62,6 +62,7 @@ def developer(tmp_path, monkeypatch):
         agent.llm = MagicMock()
         agent.llm.invoke.return_value = AIMessage(content="código gerado")
         agent.role_instruction = "role mock"
+        agent.collector = None
         yield agent
 
 

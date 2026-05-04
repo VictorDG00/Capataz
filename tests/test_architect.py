@@ -48,6 +48,7 @@ def architect(tmp_path, monkeypatch):
         agent = ArchitectAgent.__new__(ArchitectAgent)
         agent.llm = MagicMock()
         agent.role_instruction = "role mock"
+        agent.collector = None
         yield agent
 
 

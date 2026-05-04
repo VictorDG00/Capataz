@@ -11,7 +11,7 @@ class SecurityManager:
 
     def __init__(self):
         # Lista de comandos permitidos (Whitelisting)
-        self.allowed_commands = ["pytest", "npm", "ruff", "bandit", "next build"]
+        self.allowed_commands = ["pytest", "npm", "npx", "ruff", "bandit", "next", "jest"]
 
     def run_isolated_command(self, command: str, timeout: int = 60):
         """

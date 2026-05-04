@@ -10,7 +10,7 @@ def run_capataz(task_description: str, thread_id: str = None) -> None:
         thread_id = str(uuid.uuid4())
 
     collector = MetricsCollector(task=task_description, thread_id=thread_id)
-    engine = create_graph(collector=collector)
+    engine = create_graph(collector=collector, state_path=".capataz/state.db")
 
     config = {"configurable": {"thread_id": thread_id}}
     initial_state = {
@@ -21,6 +21,7 @@ def run_capataz(task_description: str, thread_id: str = None) -> None:
         "latest_output": "",
         "turn_count": 0,
         "integration_failures": 0,
+        "files_written": [],
         "status": "pending",
     }
 

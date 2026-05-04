@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # URLs / configs dos provedores
     deepseek_base_url: str = Field(default="https://api.deepseek.com", validation_alias="DEEPSEEK_BASE_URL")
 
+    # Git / GitHub
+    github_token: Optional[SecretStr] = Field(default=None, validation_alias="GITHUB_TOKEN")
+    target_repo: Optional[str] = Field(default=None, validation_alias="TARGET_REPO")
+    git_base_branch: str = Field(default="develop", validation_alias="GIT_BASE_BRANCH")
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def get_provider_for(self, role: str) -> str:

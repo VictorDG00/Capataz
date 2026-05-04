@@ -4,13 +4,17 @@ import time
 from typing import Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 
 from src.agents.architect import ArchitectAgent
 from src.agents.developer import DeveloperAgent
 from src.agents.integrator import IntegratorAgent, integrator_agent
 from src.core.metrics import MetricsCollector
+from src.core.config import settings
+from src.core.git import git_ops
+from src.core.runner import test_runner
 from src.core.security import security_manager
+from src.core.state import get_checkpointer
+from src.core.writer import file_writer
 
 MAX_INTEGRATION_FAILURES = 2
 
@@ -26,6 +30,7 @@ class AgentState(TypedDict):
     latest_output: str
     turn_count: int
     integration_failures: int
+    files_written: list
 
 
 # 2. Helpers de ciclo
@@ -74,8 +79,12 @@ def route_after_validator(state: AgentState) -> str:
         return END
     if state["status"] == "error":
         return "developer"
-    if state["status"] == "success" and state.get("current_sprint"):
-        return "developer"
+    if state["status"] == "success":
+        # Se há arquivos gravados e git habilitado, abre PR antes de continuar
+        if state.get("files_written") and bool(settings.github_token):
+            return "git"
+        if state.get("current_sprint"):
+            return "developer"
     return END
 
 
@@ -113,7 +122,7 @@ def node_integrator(state: AgentState, collector: Optional[MetricsCollector] = N
 
 # 5. Construção do grafo com injeção de collector
 
-def create_graph(collector: Optional[MetricsCollector] = None):
+def create_graph(collector: Optional[MetricsCollector] = None, state_path: Optional[str] = None):
     """
     Constrói e compila o grafo de agentes do Capataz.
 
@@ -121,6 +130,8 @@ def create_graph(collector: Optional[MetricsCollector] = None):
         collector: MetricsCollector opcional. Quando fornecido, todos os nós
                    registram tokens, custo e tempo de execução. None desativa
                    métricas sem afetar o comportamento do grafo.
+        state_path: Caminho do arquivo SQLite de checkpoint. None usa MemorySaver
+                    (útil em testes). Qualquer string usa SqliteSaver em disco.
     """
     architect = ArchitectAgent(collector=collector)
     developer = DeveloperAgent(collector=collector)
@@ -155,8 +166,14 @@ def create_graph(collector: Optional[MetricsCollector] = None):
             contract_path=state.get("contract_path"),
             feedback=feedback,
         )
+
+        written = file_writer.write_from_output(res)
+        if written:
+            print(f"📁 [DEVELOPER] {len(written)} arquivo(s) gravado(s): {written}")
+
         return {
             "latest_output": res,
+            "files_written": written,
             "turn_count": state.get("turn_count", 0) + 1,
             "status": "pending",
         }
@@ -165,7 +182,27 @@ def create_graph(collector: Optional[MetricsCollector] = None):
         return node_integrator(state, collector=collector)
 
     def _node_validator(state: AgentState) -> dict:
-        print("🛡️ [CAPATAZ] Validando segurança e testes da Sprint...")
+        print("🛡️ [CAPATAZ] Validando testes e segurança da Sprint...")
+
+        # 1. Executa testes (pytest ou jest) se houver arquivos gravados
+        if state.get("files_written"):
+            print("🧪 [VALIDATOR] Executando suite de testes...")
+            test_result = test_runner.run(runner="pytest", path="tests/")
+            if test_result["status"] != "passed":
+                print(f"❌ [VALIDATOR] Testes falharam: {test_result['summary']}")
+                if collector:
+                    collector.record_validator(test_result["duration_seconds"], "failed")
+                return {
+                    "status": "error",
+                    "latest_output": (
+                        f"[TESTES FALHARAM]\n{test_result['full_output']}"
+                    ),
+                }
+            print(f"✅ [VALIDATOR] Testes passaram: {test_result['passed']} passed.")
+            if collector:
+                collector.record_validator(test_result["duration_seconds"], "passed")
+
+        # 2. SAST (Bandit)
         start = time.perf_counter()
         scan_result = security_manager.run_security_scan()
         duration = time.perf_counter() - start
@@ -174,7 +211,7 @@ def create_graph(collector: Optional[MetricsCollector] = None):
             collector.record_validator(duration, scan_result["status"])
 
         if scan_result["status"] == "failed":
-            print("❌ [CAPATAZ] Falha na validação de segurança/testes.")
+            print("❌ [CAPATAZ] Falha na validação de segurança (SAST).")
             return {"status": "error", "latest_output": scan_result["stderr"]}
 
         print("✅ [CAPATAZ] Sprint validada com sucesso! Marcando como concluída.")
@@ -182,12 +219,41 @@ def create_graph(collector: Optional[MetricsCollector] = None):
 
         next_sprint = parse_next_sprint(state["cycle_file"])
         if next_sprint:
-            return {"status": "success", "current_sprint": next_sprint, "integration_failures": 0}
+            return {"status": "success", "current_sprint": next_sprint, "integration_failures": 0, "files_written": []}
 
         print("🎉 [CAPATAZ] Todas as sprints deste ciclo foram concluídas!")
-        return {"status": "success", "current_sprint": ""}
+        return {"status": "success", "current_sprint": "", "files_written": []}
 
-    memory = MemorySaver()
+    # node_git só é adicionado se GITHUB_TOKEN estiver configurado
+    git_enabled = bool(settings.github_token)
+
+    def _node_git(state: AgentState) -> dict:
+        print("🔀 [GIT] Criando branch, commitando e abrindo PR...")
+        sprint_text = state.get("current_sprint", "")
+        sprint_name = re.sub(r".*Sprint\s+\d+:\s*\*?\*?", "", sprint_text.split("\n")[0]).strip("* ") or "update"
+        sprint_number_match = re.search(r"Sprint\s+(\d+)", sprint_text)
+        sprint_num = sprint_number_match.group(1) if sprint_number_match else "?"
+
+        try:
+            pr_url = git_ops.run_full_flow(
+                sprint_name=sprint_name,
+                sprint_number=sprint_num,
+                files_written=state.get("files_written", []),
+                cycle_file=state.get("cycle_file", ""),
+            )
+            if pr_url:
+                print(f"✅ [GIT] PR aberto: {pr_url}")
+        except Exception as e:
+            print(f"⚠️ [GIT] Falha ao abrir PR (modo degradado): {e}")
+
+        return {}
+
+    if state_path is not None:
+        memory = get_checkpointer(state_path)
+    else:
+        from langgraph.checkpoint.memory import MemorySaver
+        memory = MemorySaver()
+
     workflow = StateGraph(AgentState)
 
     workflow.add_node("architect", _node_architect)
@@ -204,11 +270,21 @@ def create_graph(collector: Optional[MetricsCollector] = None):
         route_after_integrator,
         {"validator": "validator", "developer": "developer", "architect": "architect"},
     )
-    workflow.add_conditional_edges(
-        "validator",
-        route_after_validator,
-        {"developer": "developer", END: END},
-    )
+
+    if git_enabled:
+        workflow.add_node("git", _node_git)
+        workflow.add_conditional_edges(
+            "validator",
+            route_after_validator,
+            {"developer": "developer", "git": "git", END: END},
+        )
+        workflow.add_edge("git", END)
+    else:
+        workflow.add_conditional_edges(
+            "validator",
+            route_after_validator,
+            {"developer": "developer", END: END},
+        )
 
     return workflow.compile(checkpointer=memory)
 

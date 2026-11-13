@@ -27,9 +27,9 @@ fi
 if [ -f ".env" ]; then
     echo "✅ .env já existe. Nenhuma alteração foi feita nas variáveis atuais."
 else
-    if [ -f ".env.exemple" ]; then
-        cp .env.exemple .env
-        echo "⚠️  .env criado a partir de .env.exemple. Revise e preencha suas chaves de API antes de rodar."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo "⚠️  .env criado a partir de .env.example. Revise e preencha suas chaves de API antes de rodar."
     else
         cat > .env <<'EOF'
 # --- API KEYS ---
